@@ -1,0 +1,2051 @@
+{
+	"$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+	"contentVersion": "1.0.0.0",
+	"parameters": {
+		"factoryName": {
+			"type": "string",
+			"metadata": "Data Factory name"
+		},
+		"CRMCustomerCommifyMIProd": {
+			"type": "string"
+		},
+		"CRMCustomerDataLakeStorage": {
+			"type": "string"
+		}
+	},
+	"variables": {
+		"factoryId": "[concat('Microsoft.DataFactory/factories/', parameters('factoryName'))]"
+	},
+	"resources": [
+		{
+			"name": "[concat(parameters('factoryName'), '/CRMCustomer Load csvs')]",
+			"type": "Microsoft.DataFactory/factories/pipelines",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"activities": [
+					{
+						"name": "Truncate CRMCustomer Raw table",
+						"type": "SqlServerStoredProcedure",
+						"dependsOn": [
+							{
+								"activity": "Get CRMCustomer csvs",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "7.00:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"storedProcedureName": "[[CRMCustomerValidation].[TruncateTable]",
+							"storedProcedureParameters": {
+								"tablename": {
+									"value": "raw",
+									"type": "String"
+								},
+								"runid": {
+									"value": {
+										"value": "@pipeline().parameters.runID",
+										"type": "Expression"
+									},
+									"type": "Int32"
+								}
+							}
+						},
+						"linkedServiceName": {
+							"referenceName": "[parameters('CRMCustomerCommifyMIProd')]",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "GetCSVList",
+						"type": "GetMetadata",
+						"dependsOn": [
+							{
+								"activity": "Write import start to log",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "7.00:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"dataset": {
+								"referenceName": "CRMCustomerCSVs",
+								"type": "DatasetReference"
+							},
+							"fieldList": [
+								"childItems"
+							],
+							"storeSettings": {
+								"type": "AzureBlobFSReadSettings",
+								"recursive": true
+							},
+							"formatSettings": {
+								"type": "DelimitedTextReadSettings"
+							}
+						}
+					},
+					{
+						"name": "LoopThroughFiles",
+						"type": "ForEach",
+						"dependsOn": [
+							{
+								"activity": "Truncate CRMCustomer Raw table",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"userProperties": [],
+						"typeProperties": {
+							"items": {
+								"value": "@activity('Get CRMCustomer csvs').output.value",
+								"type": "Expression"
+							},
+							"isSequential": false,
+							"batchCount": 50,
+							"activities": [
+								{
+									"name": "LogfileCopy",
+									"type": "SqlServerStoredProcedure",
+									"dependsOn": [],
+									"policy": {
+										"timeout": "7.00:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"storedProcedureName": "[[CRMCustomerValidation].[WriteToLog]",
+										"storedProcedureParameters": {
+											"eventType": {
+												"value": "ImportCSV",
+												"type": "String"
+											},
+											"filename": {
+												"value": {
+													"value": "@item().name",
+													"type": "Expression"
+												},
+												"type": "String"
+											},
+											"Result": {
+												"value": "Data copy starting",
+												"type": "String"
+											},
+											"runID": {
+												"value": {
+													"value": "@pipeline().parameters.runID",
+													"type": "Expression"
+												},
+												"type": "Int32"
+											}
+										}
+									},
+									"linkedServiceName": {
+										"referenceName": "[parameters('CRMCustomerCommifyMIProd')]",
+										"type": "LinkedServiceReference"
+									}
+								},
+								{
+									"name": "Delete csv in source folder",
+									"type": "Delete",
+									"dependsOn": [
+										{
+											"activity": "Move CSV to processed folder",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "7.00:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"dataset": {
+											"referenceName": "CRMProcessedSource",
+											"type": "DatasetReference",
+											"parameters": {
+												"filename": {
+													"value": "@item().name",
+													"type": "Expression"
+												}
+											}
+										},
+										"logStorageSettings": {
+											"linkedServiceName": {
+												"referenceName": "[parameters('CRMCustomerDataLakeStorage')]",
+												"type": "LinkedServiceReference"
+											},
+											"path": "raw/CRMCustomerValidation/Logs"
+										},
+										"enableLogging": true,
+										"storeSettings": {
+											"type": "AzureBlobFSReadSettings",
+											"recursive": true
+										}
+									}
+								},
+								{
+									"name": "LogRowCount",
+									"type": "SqlServerStoredProcedure",
+									"dependsOn": [
+										{
+											"activity": "Get todays CRMCustomer files and push to raw table",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "7.00:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"storedProcedureName": "[[CRMCustomerValidation].[WriteToLog]",
+										"storedProcedureParameters": {
+											"eventType": {
+												"value": "ImportCSV",
+												"type": "String"
+											},
+											"Result": {
+												"value": {
+													"value": "@concat('Copy success - ', activity('Get todays CRMCustomer files and push to raw table').output.rowscopied, ' rows inserted into raw table')",
+													"type": "Expression"
+												},
+												"type": "String"
+											},
+											"filename": {
+												"value": {
+													"value": "@item().name",
+													"type": "Expression"
+												},
+												"type": "String"
+											},
+											"runid": {
+												"value": {
+													"value": "@pipeline().parameters.runID",
+													"type": "Expression"
+												},
+												"type": "Int32"
+											}
+										}
+									},
+									"linkedServiceName": {
+										"referenceName": "[parameters('CRMCustomerCommifyMIProd')]",
+										"type": "LinkedServiceReference"
+									}
+								},
+								{
+									"name": "Move CSV to processed folder",
+									"type": "Copy",
+									"dependsOn": [
+										{
+											"activity": "LogRowCount",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "7.00:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"source": {
+											"type": "BinarySource",
+											"storeSettings": {
+												"type": "AzureBlobFSReadSettings",
+												"recursive": true
+											}
+										},
+										"sink": {
+											"type": "BinarySink",
+											"storeSettings": {
+												"type": "AzureBlobFSWriteSettings"
+											}
+										},
+										"enableStaging": false
+									},
+									"inputs": [
+										{
+											"referenceName": "CRMProcessedSource",
+											"type": "DatasetReference",
+											"parameters": {
+												"filename": {
+													"value": "@item().name",
+													"type": "Expression"
+												}
+											}
+										}
+									],
+									"outputs": [
+										{
+											"referenceName": "CRMCustomerProcessed",
+											"type": "DatasetReference",
+											"parameters": {
+												"filename": {
+													"value": "@item().name",
+													"type": "Expression"
+												}
+											}
+										}
+									]
+								},
+								{
+									"name": "LogfileFailure",
+									"type": "SqlServerStoredProcedure",
+									"dependsOn": [
+										{
+											"activity": "Get todays CRMCustomer files and push to raw table",
+											"dependencyConditions": [
+												"Failed"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "7.00:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"storedProcedureName": "[[CRMCustomerValidation].[WriteToLog]",
+										"storedProcedureParameters": {
+											"eventType": {
+												"value": "ImportCSV",
+												"type": "String"
+											},
+											"Result": {
+												"value": {
+													"value": "@concat('Copy failed. ', first(activity('Get todays CRMCustomer files and push to raw table').output.errors).Message)",
+													"type": "Expression"
+												},
+												"type": "String"
+											},
+											"filename": {
+												"value": {
+													"value": "@item().name",
+													"type": "Expression"
+												},
+												"type": "String"
+											},
+											"runID": {
+												"value": {
+													"value": "@pipeline().parameters.runID",
+													"type": "Expression"
+												},
+												"type": "Int32"
+											}
+										}
+									},
+									"linkedServiceName": {
+										"referenceName": "[parameters('CRMCustomerCommifyMIProd')]",
+										"type": "LinkedServiceReference"
+									}
+								},
+								{
+									"name": "Move CSV to failed folder",
+									"type": "Copy",
+									"dependsOn": [
+										{
+											"activity": "LogfileFailure",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "7.00:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"source": {
+											"type": "BinarySource",
+											"storeSettings": {
+												"type": "AzureBlobFSReadSettings",
+												"recursive": true
+											}
+										},
+										"sink": {
+											"type": "BinarySink",
+											"storeSettings": {
+												"type": "AzureBlobFSWriteSettings"
+											}
+										},
+										"enableStaging": false
+									},
+									"inputs": [
+										{
+											"referenceName": "CRMProcessedSource",
+											"type": "DatasetReference",
+											"parameters": {
+												"filename": {
+													"value": "@item().name",
+													"type": "Expression"
+												}
+											}
+										}
+									],
+									"outputs": [
+										{
+											"referenceName": "CRMCustomerFailed",
+											"type": "DatasetReference",
+											"parameters": {
+												"FileName": {
+													"value": "@item().name",
+													"type": "Expression"
+												}
+											}
+										}
+									]
+								},
+								{
+									"name": "Get todays CRMCustomer files and push to raw table",
+									"type": "Copy",
+									"dependsOn": [
+										{
+											"activity": "LogfileCopy",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "7.00:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [
+										{
+											"name": "Source",
+											"value": "@item().name"
+										},
+										{
+											"name": "Destination",
+											"value": "CRMCustomerValidation.CRMCustomerRaw"
+										}
+									],
+									"typeProperties": {
+										"source": {
+											"type": "DelimitedTextSource",
+											"storeSettings": {
+												"type": "AzureBlobFSReadSettings",
+												"recursive": true
+											},
+											"formatSettings": {
+												"type": "DelimitedTextReadSettings"
+											}
+										},
+										"sink": {
+											"type": "AzureSqlSink"
+										},
+										"enableStaging": false,
+										"parallelCopies": 10,
+										"enableSkipIncompatibleRow": true,
+										"redirectIncompatibleRowSettings": {
+											"linkedServiceName": {
+												"referenceName": "[parameters('CRMCustomerDataLakeStorage')]",
+												"type": "LinkedServiceReference"
+											},
+											"path": "raw/CRMCustomerValidation/Logs"
+										},
+										"translator": {
+											"type": "TabularTranslator",
+											"mappings": [
+												{
+													"source": {
+														"name": "customerUniqueID",
+														"type": "String"
+													},
+													"sink": {
+														"name": "customerUniqueID",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "platformName",
+														"type": "String"
+													},
+													"sink": {
+														"name": "platformName",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "brandName",
+														"type": "String"
+													},
+													"sink": {
+														"name": "brandName",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "brandCountry",
+														"type": "String"
+													},
+													"sink": {
+														"name": "brandCountry",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "firstName",
+														"type": "String"
+													},
+													"sink": {
+														"name": "firstName",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "lastName",
+														"type": "String"
+													},
+													"sink": {
+														"name": "lastName",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "phoneNumber",
+														"type": "String"
+													},
+													"sink": {
+														"name": "phoneNumber",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "mobileNumber",
+														"type": "String"
+													},
+													"sink": {
+														"name": "mobileNumber",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "mobileVerified",
+														"type": "String"
+													},
+													"sink": {
+														"name": "mobileVerified",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "contactEmail",
+														"type": "String"
+													},
+													"sink": {
+														"name": "contactEmail",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "language",
+														"type": "String"
+													},
+													"sink": {
+														"name": "language",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "lastPlatformSessionDate",
+														"type": "String"
+													},
+													"sink": {
+														"name": "lastPlatformSessionDate",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "leadOwner",
+														"type": "String"
+													},
+													"sink": {
+														"name": "leadOwner",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "sourceCode",
+														"type": "String"
+													},
+													"sink": {
+														"name": "sourceCode",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "sourceDetail",
+														"type": "String"
+													},
+													"sink": {
+														"name": "sourceDetail",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "leadSource",
+														"type": "String"
+													},
+													"sink": {
+														"name": "leadSource",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "leadStatus",
+														"type": "String"
+													},
+													"sink": {
+														"name": "leadStatus",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "engagementType",
+														"type": "String"
+													},
+													"sink": {
+														"name": "engagementType",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "lastModified",
+														"type": "String"
+													},
+													"sink": {
+														"name": "lastModified",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "communicationPreferences",
+														"type": "String"
+													},
+													"sink": {
+														"name": "communicationPreferences",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "companyName",
+														"type": "String"
+													},
+													"sink": {
+														"name": "companyName",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "companyCity",
+														"type": "String"
+													},
+													"sink": {
+														"name": "companyCity",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "companyCountry",
+														"type": "String"
+													},
+													"sink": {
+														"name": "companyCountry",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "industry",
+														"type": "String"
+													},
+													"sink": {
+														"name": "industry",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "website",
+														"type": "String"
+													},
+													"sink": {
+														"name": "website",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "platformAccountURL",
+														"type": "String"
+													},
+													"sink": {
+														"name": "platformAccountURL",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "accountCreatedDate",
+														"type": "String"
+													},
+													"sink": {
+														"name": "accountCreatedDate",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "accountType",
+														"type": "String"
+													},
+													"sink": {
+														"name": "accountType",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "accountManager",
+														"type": "String"
+													},
+													"sink": {
+														"name": "accountManager",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "accountBillingType",
+														"type": "String"
+													},
+													"sink": {
+														"name": "accountBillingType",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "billingAddress",
+														"type": "String"
+													},
+													"sink": {
+														"name": "billingAddress",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "accountCurrency",
+														"type": "String"
+													},
+													"sink": {
+														"name": "accountCurrency",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "accountCurrencySymbol",
+														"type": "String"
+													},
+													"sink": {
+														"name": "accountCurrencySymbol",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "accountPrepayBalance",
+														"type": "String"
+													},
+													"sink": {
+														"name": "accountPrepayBalance",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "isWhiteLabel",
+														"type": "String"
+													},
+													"sink": {
+														"name": "isWhiteLabel",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "isAffiliate",
+														"type": "String"
+													},
+													"sink": {
+														"name": "isAffiliate",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "isDeleted",
+														"type": "String"
+													},
+													"sink": {
+														"name": "isDeleted",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "isBlocked",
+														"type": "String"
+													},
+													"sink": {
+														"name": "isBlocked",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "blockedDate",
+														"type": "String"
+													},
+													"sink": {
+														"name": "blockedDate",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "partnerAccount",
+														"type": "String"
+													},
+													"sink": {
+														"name": "partnerAccount",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "howServiceUsed",
+														"type": "String"
+													},
+													"sink": {
+														"name": "howServiceUsed",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "lastMessageReceivedDate",
+														"type": "String"
+													},
+													"sink": {
+														"name": "lastMessageReceivedDate",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "isReferral",
+														"type": "String"
+													},
+													"sink": {
+														"name": "isReferral",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "saasPackageType",
+														"type": "String"
+													},
+													"sink": {
+														"name": "saasPackageType",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "saasPackageStartDate",
+														"type": "String"
+													},
+													"sink": {
+														"name": "saasPackageStartDate",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "isSWReferral",
+														"type": "String"
+													},
+													"sink": {
+														"name": "isSWReferral",
+														"type": "String"
+													}
+												},
+												{
+													"source": {
+														"name": "exportStatus",
+														"type": "String"
+													},
+													"sink": {
+														"name": "exportStatus",
+														"type": "String"
+													}
+												}
+											]
+										}
+									},
+									"inputs": [
+										{
+											"referenceName": "CRMCustomerNamed",
+											"type": "DatasetReference",
+											"parameters": {
+												"filename": {
+													"value": "@item().name",
+													"type": "Expression"
+												}
+											}
+										}
+									],
+									"outputs": [
+										{
+											"referenceName": "CRMCustomerRaw",
+											"type": "DatasetReference"
+										}
+									]
+								},
+								{
+									"name": "Delete csv in source folder if fail",
+									"type": "Delete",
+									"dependsOn": [
+										{
+											"activity": "Move CSV to failed folder",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "7.00:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"dataset": {
+											"referenceName": "CRMProcessedSource",
+											"type": "DatasetReference",
+											"parameters": {
+												"filename": {
+													"value": "@item().name",
+													"type": "Expression"
+												}
+											}
+										},
+										"logStorageSettings": {
+											"linkedServiceName": {
+												"referenceName": "[parameters('CRMCustomerDataLakeStorage')]",
+												"type": "LinkedServiceReference"
+											},
+											"path": "raw/CRMCustomerValidation/Logs"
+										},
+										"enableLogging": true,
+										"storeSettings": {
+											"type": "AzureBlobFSReadSettings",
+											"recursive": true
+										}
+									}
+								}
+							]
+						}
+					},
+					{
+						"name": "Write import start to log",
+						"type": "SqlServerStoredProcedure",
+						"dependsOn": [],
+						"policy": {
+							"timeout": "7.00:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"storedProcedureName": "[[CRMCustomerValidation].[WriteToLog]",
+							"storedProcedureParameters": {
+								"eventType": {
+									"value": "ImportCSV",
+									"type": "String"
+								},
+								"Result": {
+									"value": "Import starting",
+									"type": "String"
+								},
+								"runId": {
+									"value": {
+										"value": "@pipeline().parameters.runID",
+										"type": "Expression"
+									},
+									"type": "Int32"
+								}
+							}
+						},
+						"linkedServiceName": {
+							"referenceName": "[parameters('CRMCustomerCommifyMIProd')]",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "Write import end to log",
+						"type": "SqlServerStoredProcedure",
+						"dependsOn": [
+							{
+								"activity": "Update CRMCustomerSpendSend",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "7.00:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"storedProcedureName": "[[CRMCustomerValidation].[WriteToLog]",
+							"storedProcedureParameters": {
+								"eventType": {
+									"value": "ImportCSV",
+									"type": "String"
+								},
+								"Result": {
+									"value": "Import complete",
+									"type": "String"
+								},
+								"runID": {
+									"value": {
+										"value": "@pipeline().parameters.runID",
+										"type": "Expression"
+									},
+									"type": "Int32"
+								}
+							}
+						},
+						"linkedServiceName": {
+							"referenceName": "[parameters('CRMCustomerCommifyMIProd')]",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "Add RunID to Raw",
+						"type": "SqlServerStoredProcedure",
+						"dependsOn": [
+							{
+								"activity": "LoopThroughFiles",
+								"dependencyConditions": [
+									"Completed"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "7.00:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"storedProcedureName": "[[CRMCustomerValidation].[AddRunIDToRaw]",
+							"storedProcedureParameters": {
+								"runid": {
+									"value": {
+										"value": "@pipeline().parameters.runID",
+										"type": "Expression"
+									},
+									"type": "Int32"
+								}
+							}
+						},
+						"linkedServiceName": {
+							"referenceName": "[parameters('CRMCustomerCommifyMIProd')]",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "Update CRMCustomer",
+						"type": "SqlServerStoredProcedure",
+						"dependsOn": [
+							{
+								"activity": "Update hubspot primary emails",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "7.00:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"storedProcedureName": "[[CRMCustomerValidation].[UpsertCRMCustomerTable]",
+							"storedProcedureParameters": {
+								"runid": {
+									"value": {
+										"value": "@pipeline().parameters.runID",
+										"type": "Expression"
+									},
+									"type": "Int32"
+								}
+							}
+						},
+						"linkedServiceName": {
+							"referenceName": "[parameters('CRMCustomerCommifyMIProd')]",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "Get CRMCustomer csvs",
+						"type": "Filter",
+						"dependsOn": [
+							{
+								"activity": "GetCSVList",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"userProperties": [],
+						"typeProperties": {
+							"items": {
+								"value": "@activity('GetCSVList').output.childitems",
+								"type": "Expression"
+							},
+							"condition": {
+								"value": "@greater(indexof(item().name, 'CRMCustomer'),0)",
+								"type": "Expression"
+							}
+						}
+					},
+					{
+						"name": "Cleanse Raw data",
+						"type": "SqlServerStoredProcedure",
+						"dependsOn": [
+							{
+								"activity": "Add RunID to Raw",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "7.00:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"storedProcedureName": "[[CRMCustomerValidation].[SanitiseData]",
+							"storedProcedureParameters": {
+								"runid": {
+									"value": {
+										"value": "@pipeline().parameters.runID",
+										"type": "Expression"
+									},
+									"type": "Int32"
+								}
+							}
+						},
+						"linkedServiceName": {
+							"referenceName": "[parameters('CRMCustomerCommifyMIProd')]",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "Update CRMCustomerSpendSend",
+						"type": "SqlServerStoredProcedure",
+						"dependsOn": [
+							{
+								"activity": "Update CRMCustomer",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "7.00:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"storedProcedureName": "[[CRMCustomerValidation].[UpsertCRMCustomer_SendSpend]",
+							"storedProcedureParameters": {
+								"runid": {
+									"value": {
+										"value": "@pipeline().parameters.runID",
+										"type": "Expression"
+									},
+									"type": "Int32"
+								}
+							}
+						},
+						"linkedServiceName": {
+							"referenceName": "[parameters('CRMCustomerCommifyMIProd')]",
+							"type": "LinkedServiceReference"
+						}
+					},
+					{
+						"name": "Update hubspot primary emails",
+						"type": "SqlServerStoredProcedure",
+						"dependsOn": [
+							{
+								"activity": "Cleanse Raw data",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "7.00:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"storedProcedureName": "[[CRMCustomerValidation].[InsertHubSpotEmails]"
+						},
+						"linkedServiceName": {
+							"referenceName": "[parameters('CRMCustomerCommifyMIProd')]",
+							"type": "LinkedServiceReference"
+						}
+					}
+				],
+				"concurrency": 1,
+				"parameters": {
+					"runID": {
+						"type": "int"
+					}
+				},
+				"variables": {
+					"filename": {
+						"type": "String"
+					}
+				},
+				"folder": {
+					"name": "CRMCustomerValidation"
+				},
+				"annotations": []
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), '/datasets/CRMCustomerCSVs')]",
+				"[concat(variables('factoryId'), '/datasets/CRMProcessedSource')]",
+				"[concat(variables('factoryId'), '/datasets/CRMCustomerProcessed')]",
+				"[concat(variables('factoryId'), '/datasets/CRMCustomerFailed')]",
+				"[concat(variables('factoryId'), '/datasets/CRMCustomerNamed')]",
+				"[concat(variables('factoryId'), '/datasets/CRMCustomerRaw')]"
+			]
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/CRMCustomerCSVs')]",
+			"type": "Microsoft.DataFactory/factories/datasets",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "[parameters('CRMCustomerDataLakeStorage')]",
+					"type": "LinkedServiceReference"
+				},
+				"annotations": [],
+				"type": "DelimitedText",
+				"typeProperties": {
+					"location": {
+						"type": "AzureBlobFSLocation",
+						"folderPath": "CRMCustomerValidationProd",
+						"fileSystem": "raw"
+					},
+					"columnDelimiter": ",",
+					"escapeChar": "\\",
+					"quoteChar": "\""
+				},
+				"schema": [
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					},
+					{
+						"type": "String"
+					}
+				]
+			},
+			"dependsOn": []
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/CRMProcessedSource')]",
+			"type": "Microsoft.DataFactory/factories/datasets",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "[parameters('CRMCustomerDataLakeStorage')]",
+					"type": "LinkedServiceReference"
+				},
+				"parameters": {
+					"filename": {
+						"type": "string"
+					}
+				},
+				"folder": {
+					"name": "CRMCustomerValidation"
+				},
+				"annotations": [],
+				"type": "Binary",
+				"typeProperties": {
+					"location": {
+						"type": "AzureBlobFSLocation",
+						"fileName": {
+							"value": "@dataset().filename",
+							"type": "Expression"
+						},
+						"folderPath": "CRMCustomerValidationProd",
+						"fileSystem": "raw"
+					}
+				}
+			},
+			"dependsOn": []
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/CRMCustomerProcessed')]",
+			"type": "Microsoft.DataFactory/factories/datasets",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "[parameters('CRMCustomerDataLakeStorage')]",
+					"type": "LinkedServiceReference"
+				},
+				"parameters": {
+					"filename": {
+						"type": "string"
+					}
+				},
+				"folder": {
+					"name": "CRMCustomerValidation"
+				},
+				"annotations": [],
+				"type": "Binary",
+				"typeProperties": {
+					"location": {
+						"type": "AzureBlobFSLocation",
+						"fileName": {
+							"value": "@dataset().filename",
+							"type": "Expression"
+						},
+						"folderPath": "CRMCustomerValidationProd/Processed",
+						"fileSystem": "raw"
+					}
+				}
+			},
+			"dependsOn": []
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/CRMCustomerFailed')]",
+			"type": "Microsoft.DataFactory/factories/datasets",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "[parameters('CRMCustomerDataLakeStorage')]",
+					"type": "LinkedServiceReference"
+				},
+				"parameters": {
+					"FileName": {
+						"type": "string"
+					}
+				},
+				"folder": {
+					"name": "CRMCustomerValidation"
+				},
+				"annotations": [],
+				"type": "Binary",
+				"typeProperties": {
+					"location": {
+						"type": "AzureBlobFSLocation",
+						"fileName": {
+							"value": "@dataset().FileName",
+							"type": "Expression"
+						},
+						"folderPath": "CRMCustomerValidationProd/Failed",
+						"fileSystem": "raw"
+					}
+				}
+			},
+			"dependsOn": []
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/CRMCustomerNamed')]",
+			"type": "Microsoft.DataFactory/factories/datasets",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "[parameters('CRMCustomerDataLakeStorage')]",
+					"type": "LinkedServiceReference"
+				},
+				"parameters": {
+					"filename": {
+						"type": "string"
+					}
+				},
+				"folder": {
+					"name": "CRMCustomerValidation"
+				},
+				"annotations": [],
+				"type": "DelimitedText",
+				"typeProperties": {
+					"location": {
+						"type": "AzureBlobFSLocation",
+						"fileName": {
+							"value": "@dataset().filename",
+							"type": "Expression"
+						},
+						"folderPath": "CRMCustomerValidationProd",
+						"fileSystem": "raw"
+					},
+					"columnDelimiter": ",",
+					"escapeChar": "\\",
+					"firstRowAsHeader": true,
+					"quoteChar": "\""
+				},
+				"schema": [
+					{
+						"name": "customerUniqueID",
+						"type": "String"
+					},
+					{
+						"name": "platformName",
+						"type": "String"
+					},
+					{
+						"name": "brandName",
+						"type": "String"
+					},
+					{
+						"name": "brandCountry",
+						"type": "String"
+					},
+					{
+						"name": "firstName",
+						"type": "String"
+					},
+					{
+						"name": "lastName",
+						"type": "String"
+					},
+					{
+						"name": "phoneNumber",
+						"type": "String"
+					},
+					{
+						"name": "mobileNumber",
+						"type": "String"
+					},
+					{
+						"name": "mobileVerified",
+						"type": "String"
+					},
+					{
+						"name": "contactEmail",
+						"type": "String"
+					},
+					{
+						"name": "language",
+						"type": "String"
+					},
+					{
+						"name": "lastPlatformSessionDate",
+						"type": "String"
+					},
+					{
+						"name": "leadOwner",
+						"type": "String"
+					},
+					{
+						"name": "sourceCode",
+						"type": "String"
+					},
+					{
+						"name": "sourceDetail",
+						"type": "String"
+					},
+					{
+						"name": "leadSource",
+						"type": "String"
+					},
+					{
+						"name": "leadStatus",
+						"type": "String"
+					},
+					{
+						"name": "engagementType",
+						"type": "String"
+					},
+					{
+						"name": "lastModified",
+						"type": "String"
+					},
+					{
+						"name": "communicationPreferences",
+						"type": "String"
+					},
+					{
+						"name": "companyName",
+						"type": "String"
+					},
+					{
+						"name": "companyCity",
+						"type": "String"
+					},
+					{
+						"name": "companyCountry",
+						"type": "String"
+					},
+					{
+						"name": "industry",
+						"type": "String"
+					},
+					{
+						"name": "website",
+						"type": "String"
+					},
+					{
+						"name": "platformAccountURL",
+						"type": "String"
+					},
+					{
+						"name": "accountCreatedDate",
+						"type": "String"
+					},
+					{
+						"name": "accountType",
+						"type": "String"
+					},
+					{
+						"name": "accountManager",
+						"type": "String"
+					},
+					{
+						"name": "accountBillingType",
+						"type": "String"
+					},
+					{
+						"name": "billingAddress",
+						"type": "String"
+					},
+					{
+						"name": "accountCurrency",
+						"type": "String"
+					},
+					{
+						"name": "accountCurrencySymbol",
+						"type": "String"
+					},
+					{
+						"name": "accountPrepayBalance",
+						"type": "String"
+					},
+					{
+						"name": "isWhiteLabel",
+						"type": "String"
+					},
+					{
+						"name": "isAffiliate",
+						"type": "String"
+					},
+					{
+						"name": "isDeleted",
+						"type": "String"
+					},
+					{
+						"name": "isBlocked",
+						"type": "String"
+					},
+					{
+						"name": "blockedDate",
+						"type": "String"
+					},
+					{
+						"name": "partnerAccount",
+						"type": "String"
+					},
+					{
+						"name": "howServiceUsed",
+						"type": "String"
+					},
+					{
+						"name": "lastMessageReceivedDate",
+						"type": "String"
+					},
+					{
+						"name": "isReferral",
+						"type": "String"
+					},
+					{
+						"name": "saasPackageType",
+						"type": "String"
+					},
+					{
+						"name": "saasPackageStartDate",
+						"type": "String"
+					},
+					{
+						"name": "isSWReferral",
+						"type": "String"
+					},
+					{
+						"name": "exportStatus",
+						"type": "String"
+					}
+				]
+			},
+			"dependsOn": []
+		},
+		{
+			"name": "[concat(parameters('factoryName'), '/CRMCustomerRaw')]",
+			"type": "Microsoft.DataFactory/factories/datasets",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"linkedServiceName": {
+					"referenceName": "[parameters('CRMCustomerCommifyMIProd')]",
+					"type": "LinkedServiceReference"
+				},
+				"folder": {
+					"name": "CRMCustomerValidation"
+				},
+				"annotations": [],
+				"type": "AzureSqlTable",
+				"schema": [
+					{
+						"name": "customerUniqueID",
+						"type": "varchar"
+					},
+					{
+						"name": "platformName",
+						"type": "varchar"
+					},
+					{
+						"name": "brandName",
+						"type": "varchar"
+					},
+					{
+						"name": "brandCountry",
+						"type": "varchar"
+					},
+					{
+						"name": "firstName",
+						"type": "varchar"
+					},
+					{
+						"name": "lastName",
+						"type": "varchar"
+					},
+					{
+						"name": "phoneNumber",
+						"type": "varchar"
+					},
+					{
+						"name": "mobileNumber",
+						"type": "varchar"
+					},
+					{
+						"name": "mobileVerified",
+						"type": "varchar"
+					},
+					{
+						"name": "contactEmail",
+						"type": "varchar"
+					},
+					{
+						"name": "secondaryEmail",
+						"type": "varchar"
+					},
+					{
+						"name": "language",
+						"type": "varchar"
+					},
+					{
+						"name": "lastPlatformSessionDate",
+						"type": "varchar"
+					},
+					{
+						"name": "leadOwner",
+						"type": "varchar"
+					},
+					{
+						"name": "sourceCode",
+						"type": "varchar"
+					},
+					{
+						"name": "sourceDetail",
+						"type": "varchar"
+					},
+					{
+						"name": "leadSource",
+						"type": "varchar"
+					},
+					{
+						"name": "leadStatus",
+						"type": "varchar"
+					},
+					{
+						"name": "engagementType",
+						"type": "varchar"
+					},
+					{
+						"name": "lastModified",
+						"type": "varchar"
+					},
+					{
+						"name": "communicationPreferences",
+						"type": "varchar"
+					},
+					{
+						"name": "companyName",
+						"type": "varchar"
+					},
+					{
+						"name": "companyCity",
+						"type": "varchar"
+					},
+					{
+						"name": "companyCountry",
+						"type": "varchar"
+					},
+					{
+						"name": "industry",
+						"type": "varchar"
+					},
+					{
+						"name": "website",
+						"type": "varchar"
+					},
+					{
+						"name": "platformAccountURL",
+						"type": "varchar"
+					},
+					{
+						"name": "accountCreatedDate",
+						"type": "varchar"
+					},
+					{
+						"name": "accountType",
+						"type": "varchar"
+					},
+					{
+						"name": "accountManager",
+						"type": "varchar"
+					},
+					{
+						"name": "accountBillingType",
+						"type": "varchar"
+					},
+					{
+						"name": "billingAddress",
+						"type": "varchar"
+					},
+					{
+						"name": "accountCurrency",
+						"type": "varchar"
+					},
+					{
+						"name": "accountCurrencySymbol",
+						"type": "varchar"
+					},
+					{
+						"name": "accountPrepayBalance",
+						"type": "varchar"
+					},
+					{
+						"name": "isWhiteLabel",
+						"type": "varchar"
+					},
+					{
+						"name": "isAffiliate",
+						"type": "varchar"
+					},
+					{
+						"name": "isDeleted",
+						"type": "varchar"
+					},
+					{
+						"name": "isBlocked",
+						"type": "varchar"
+					},
+					{
+						"name": "blockedDate",
+						"type": "varchar"
+					},
+					{
+						"name": "partnerAccount",
+						"type": "varchar"
+					},
+					{
+						"name": "howServiceUsed",
+						"type": "varchar"
+					},
+					{
+						"name": "lastMessageReceivedDate",
+						"type": "varchar"
+					},
+					{
+						"name": "isReferral",
+						"type": "varchar"
+					},
+					{
+						"name": "saasPackageType",
+						"type": "varchar"
+					},
+					{
+						"name": "saasPackageStartDate",
+						"type": "varchar"
+					},
+					{
+						"name": "isSWReferral",
+						"type": "varchar"
+					},
+					{
+						"name": "exportStatus",
+						"type": "varchar"
+					},
+					{
+						"name": "cs_Contact",
+						"type": "int",
+						"precision": 10
+					},
+					{
+						"name": "Filename",
+						"type": "nvarchar"
+					}
+				],
+				"typeProperties": {
+					"schema": "CRMCustomerValidation",
+					"table": "CRMCustomerRaw"
+				}
+			},
+			"dependsOn": []
+		}
+	]
+}
